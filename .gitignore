@@ -1,0 +1,29 @@
+# Auto-generated files
+__pycache__/
+*.py[co]
+.Python
+build/
+dist/
+eggs/
+*.egg-info/
+MANIFEST
+
+# Large model weights (keep only config/json)
+hf_upload/**/pytorch_model.bin
+hf_upload/**/*.pth
+hf_upload/**/*.pt
+
+# Data files and large CSVs
+*.csv.gz
+outputs/*.csv
+*_diag.csv
+*_lab.csv
+*eicu_*.csv
+*tokeniz*.json
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

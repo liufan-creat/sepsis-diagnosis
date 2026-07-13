@@ -1,0 +1,9 @@
+torch>=2.0
+pandas>=1.5
+numpy>=1.24
+transformers>=4.30
+tokenizers>=0.14
+scikit-learn>=1.2
+matplotlib>=3.7
+seaborn>=0.12
+shap>=0.42
