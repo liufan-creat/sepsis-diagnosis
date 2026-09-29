@@ -8,7 +8,6 @@ Produces:
 
 Usage:
     python cluster_embeddings.py --embeddings embeddings.csv --labels labels.csv --prefix diag --n-clusters 8
-    python cluster_embeddings.py --embeddings embeddings.csv --labels labels.csv --prefix lab --n-clusters 6
 """
 
 import argparse

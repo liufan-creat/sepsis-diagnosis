@@ -2,15 +2,12 @@
 """
 Unified evaluator for sepsis diagnosis models.
 
-Evaluates all 4 checkpoints (6L/36L, CSL/Recon) on downstream datasets.
+Evaluates all CSL checkpoints (6L/36L) on downstream datasets.
 Uses hard predictions (torch.argmax) + ROC/AUC.
 
 Usage:
-  # Run ALL 4 models on ALL matching datasets
+  # Run all CSL models on all matching datasets
   python unified_eval.py
-
-  # Run only CSL (diag) models
-  python unified_eval.py --model-type cs_l
 
   # Run specific checkpoint(s) only
   python unified_eval.py --checkpoint outputs/BERT-36L-CSL.pth outputs/BERT-6L-CSL.pth
@@ -33,7 +30,7 @@ from tokenizer_builder import load_tokenizer
 from bert_classifier import BertClassifier
 from config import (
     OUTPUT_DIR, BASE_DIR, MAX_LENGTH, LABEL_DIM, HIDDEN_SIZE,
-    NUM_HEADS, CLASS_NUM, DROPOUT, TOKENIZER_FILE_DIAG, TOKENIZER_FILE_LAB,
+    NUM_HEADS, CLASS_NUM, DROPOUT, TOKENIZER_FILE_DIAG,
 )
 
 # ──────────────────────────── Model Registry ─────────────────────────────
@@ -41,8 +38,6 @@ from config import (
 ALL_MODELS = [
     {"name": "6L-CSL",  "checkpoint": f"{OUTPUT_DIR}/BERT-6L-CSL.pth",    "encoder_num": 1},
     {"name": "36L-CSL", "checkpoint": f"{OUTPUT_DIR}/BERT-36L-CSL.pth",   "encoder_num": 6},
-    {"name": "6L-Recon","checkpoint": f"{OUTPUT_DIR}/BERT-6L-Recon.pth",  "encoder_num": 1},
-    {"name": "36L-Recon","checkpoint":f"{OUTPUT_DIR}/BERT-36L-Recon.pth", "encoder_num": 6},
 ]
 
 # ──────────────────────────── Datasets ───────────────────────────────────
@@ -51,12 +46,6 @@ DIAG_DATASETS = [
     ("mimic-iv", f"{OUTPUT_DIR}/mimi3_diag.csv"),
     ("eICU",     f"{OUTPUT_DIR}/eicu_diag.csv"),
     ("wx",       f"{OUTPUT_DIR}/wx.csv"),
-]
-
-LAB_DATASETS = [
-    ("mimic-iv",        f"{OUTPUT_DIR}/mimi3_lab.csv"),
-    ("eICU-enriched",   f"{OUTPUT_DIR}/eicu_lab_enriched.csv"),
-    ("wx",              f"{OUTPUT_DIR}/wx_lab.csv"),
 ]
 
 
@@ -129,11 +118,7 @@ def compute_metrics(labels, preds):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Unified evaluator: 4 models x downstream datasets"
-    )
-    parser.add_argument(
-        "--model-type", choices=["cs_l", "recon", "all"], default="all",
-        help="Which model family to run (default: all).",
+        description="Unified evaluator: CSL models x downstream datasets"
     )
     parser.add_argument(
         "--checkpoint", nargs="+", default=None,
@@ -164,42 +149,32 @@ def main():
     # ── 1. Resolve which models to run ─────────────────────
 
     if args.checkpoint:
-        # User gave explicit checkpoint(s) — auto-detect type via vocab_size
+        # User gave explicit checkpoint(s) — auto-detect encoder_num from branch count
         custom_models = []
         for cp_path_str in args.checkpoint:
             cp_path = Path(cp_path_str)
             ckpt_name = cp_path.stem  # e.g. "BERT-36L-CSL"
 
             ckpt_data = torch.load(cp_path, map_location=device, weights_only=False)
-            vocab_size = ckpt_data["model_state_dict"]["tok_embed.weight"].shape[0]
             branch_ids = set(
                 k.split(".")[1] for k in ckpt_data["model_state_dict"].keys()
                 if k.startswith("module_list.")
             )
             encoder_num = len(branch_ids)
 
-            # vocab_size 5175 → lab/recon format, else diag/csl
-            model_type = "recon" if vocab_size == 5175 else "cs_l"
-
             custom_models.append({
                 "name": ckpt_name,
                 "checkpoint": str(cp_path),
                 "encoder_num": encoder_num,
-                "model_type": model_type,
             })
         models_to_run = custom_models
         print(f"Running {len(models_to_run)} user-specified checkpoint(s):")
     else:
-        # Build list from registered models filtered by --model-type
-        models_to_run = []
-        for m in ALL_MODELS:
-            m_type = "recon" if "Recon" in m["name"] else "cs_l"
-            if args.model_type == "all" or args.model_type == m_type:
-                models_to_run.append({**m, "model_type": m_type})
-        print(f"Running {len(models_to_run)} model(s) (--model-type={args.model_type}):")
+        models_to_run = list(ALL_MODELS)
+        print(f"Running {len(models_to_run)} model(s):")
 
     for m in models_to_run:
-        print(f"  {m['name']}: encoder_num={m['encoder_num']}, type={m['model_type']}")
+        print(f"  {m['name']}: encoder_num={m['encoder_num']}")
 
     # ── 2. Resolve which datasets to run ───────────────────
 
@@ -213,17 +188,11 @@ def main():
         (n, str(Path(fp).absolute()))
         for n, fp in DIAG_DATASETS if Path(fp).exists()
     ]
-    lab_list = [
-        (n, str(Path(fp).absolute()))
-        for n, fp in LAB_DATASETS if Path(fp).exists()
-    ]
 
     if input_filter:
         diag_list = [(n, p) for n, p in diag_list if p in input_filter]
-        lab_list  = [(n, p) for n, p in lab_list  if p in input_filter]
 
-    print(f"\nDiag datasets: {[n for n,_ in diag_list]}")
-    print(f"Lab  datasets: {[n for n,_ in lab_list]}\n")
+    print(f"\nDatasets: {[n for n,_ in diag_list]}\n")
 
     # ── 3. Run evaluations ────────────────────────────────
 
@@ -239,9 +208,9 @@ def main():
         print(f"Loading [{m['name']}]  encoder_num={m['encoder_num']}")
         model = build_and_load_model(ckpt_path, m["encoder_num"], device)
 
-        # Pick dataset list based on model type
-        datasets = lab_list if m["model_type"] == "recon" else diag_list
-        tkr_path = TOKENIZER_FILE_LAB if m["model_type"] == "recon" else TOKENIZER_FILE_DIAG
+        # Pick dataset list and tokenizer (CSL: diagnoses only)
+        datasets = diag_list
+        tkr_path = TOKENIZER_FILE_DIAG
 
         tokenizer = load_tokenizer(tkr_path)
 

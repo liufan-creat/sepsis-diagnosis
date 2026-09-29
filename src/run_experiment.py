@@ -2,13 +2,11 @@
 """
 Unified experiment runner for sepsis diagnosis prediction.
 
-Modes:
-  - diag:     [CLS] + long_title, 5000 steps, 8 clusters
-  - dig_lab:  classification_label + long_title, 10000 steps, 6 clusters + heatmap/SHAP per cluster
+Input: [CLS] + long_title, 5000 steps, 8 TSNE clusters.
 
 Usage:
-  python run_experiment.py                               # Default diag mode
-  python run_experiment.py --lab-input outputs/patient_summary_labeled.csv --enable-lab-analysis
+  python run_experiment.py                               # mimi3_diag.csv (config)
+  python run_experiment.py --diag-input outputs/eicu_diag.csv
   python run_experiment.py --train-steps 8000 --n-clusters 10 --encoder-num 4
 """
 
@@ -30,9 +28,9 @@ from config import (
     BASE_DIR, OUTPUT_DIR, LABEL_DIM, HIDDEN_SIZE, NUM_HEADS,
     CLASS_NUM, BATCH_SIZE, MAX_LENGTH, LR, WEIGHT_DECAY, DROPOUT,
     LOSS_WEIGHTS, RANDOM_STATE,
-    TRAIN_EPOCHS_DIAG, TRAIN_EPOCHS_LAB,
-    TOKENIZER_FILE_DIAG, TOKENIZER_FILE_LAB,
-    CHECKPOINT_DIAG, CHECKPOINT_LAB,
+    TRAIN_EPOCHS_DIAG,
+    TOKENIZER_FILE_DIAG,
+    CHECKPOINT_DIAG,
 )
 from bert_classifier import BertClassifier
 from tokenizer_builder import load_tokenizer, build_shap_tokenizer
@@ -52,16 +50,6 @@ DEFAULT_CONFIG = {
         "prefix": "diag",
         "title": "DIAG (diagnoses only, palliative included)",
     },
-    "dig_lab": {
-        "steps": TRAIN_EPOCHS_LAB,
-        "clusters": 6,
-        "perplexity": 20,
-        "tsne_rs": 100,
-        "tokenizer": TOKENIZER_FILE_LAB,
-        "checkpoint": CHECKPOINT_LAB,
-        "prefix": "lab",
-        "title": "DIG_LAB (diagnoses + classification labels)",
-    },
 }
 
 
@@ -77,12 +65,8 @@ def _fix_unk_token(tokenizer_obj):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Sepsis diagnosis experiment runner")
-    parser.add_argument("--mode", choices=["diag", "dig_lab"], default=None,
-                        help="Mode. If None, auto-detect from inputs.")
     parser.add_argument("--diag-input", default=None,
-                        help="Path to mimi3_diag.csv for diag mode. Overrides config.")
-    parser.add_argument("--lab-input", default=None,
-                        help="Path to patient_summary_labeled.csv for dig_lab mode.")
+                        help="Path to mimi3_diag.csv (or external diag CSV). Overrides config.")
     parser.add_argument("--train-steps", type=int, default=None,
                         help="Override training steps.")
     parser.add_argument("--n-clusters", type=int, default=None,
@@ -95,40 +79,13 @@ def parse_args():
                         help="Override checkpoint save path.")
     parser.add_argument("--output-dir", default=None,
                         help="Override output directory.")
-    parser.add_argument("--enable-lab-analysis", action="store_true",
-                        help="Enable dig_lab-specific analysis (heatmap, label embedding, etc.).")
     return parser.parse_args()
 
 
-def detect_mode(args):
-    """Auto-detect mode if not explicitly set."""
-    if args.mode is not None:
-        return args.mode
-    if args.lab_input or args.enable_lab_analysis:
-        return "dig_lab"
-    return "diag"
-
-
-# ── Data loading ───────────────────────────────────────────────────
+# ── Data loading ───────────────────────────────────────────────────────
 
 def load_data(mode, args):
-    """Load and prepare input data based on mode."""
-    if mode == "dig_lab":
-        diag_path = args.diag_input or Path(OUTPUT_DIR) / "mimi3_diag.csv"
-        lab_path = args.lab_input or Path(OUTPUT_DIR) / "patient_summary_labeled.csv"
-
-        data_dig = pd.read_csv(diag_path)
-        lab = pd.read_csv(lab_path)
-        print(f"Diagnoses: {len(data_dig)}, Lab: {len(lab)}")
-
-        # Merge lab labels
-        lab_subset = lab[["hadm_id", "classification_label"]].copy()
-        data = pd.merge(data_dig, lab_subset, on="hadm_id", how="inner")
-        data["input"] = data["classification_label"] + " " + data["long_title"]
-
-        return data, lab
-
-    # diag mode
+    """Load input data; returns (data, None)."""
     diag_path = args.diag_input or Path(OUTPUT_DIR) / "mimi3_diag.csv"
     data = pd.read_csv(diag_path)
     data["input"] = "[CLS] " + data["long_title"]
@@ -262,120 +219,6 @@ def run_clustering(data_filtered, full_embs, cfg, args):
     return result, clusters_data
 
 
-# ── Lab analysis ───────────────────────────────────────────────────
-
-def run_lab_analysis(model, tokenizer, device, data, clustered, lab, cfg, full_embs=None):
-    """Dig_lab-specific analysis: heatmap, label embedding, palliative check."""
-    prefix = cfg["prefix"]
-    target_letters = ["K", "L", "C", "R", "N", "H", "M", "E"]
-
-    # Select high/medium mortality clusters
-    data_H = data[data["cluster"] == 0]
-    data_M = data[data["cluster"] == 2]
-
-    for name, cdata in [("H", data_H), ("M", data_M)]:
-        print(f"\n--- Cluster {name}: {len(cdata)} samples ---")
-        if len(cdata) == 0:
-            print(f"  Skipping empty cluster {name}")
-            continue
-
-        dset = cdata.copy()
-        dset["status"] = dset["classification_label"].str.split("_").str[0]
-        dset["cate"] = dset["classification_label"].str.split("_").str[1]
-
-        for char in target_letters:
-            dset[char] = dset["cate"].str.contains(char, na=False).astype(int)
-        dset["shock"] = (dset["status"] == "shock").astype(int)
-
-        cols = ["shock"] + target_letters
-        col_sums = dset[cols].sum() / len(dset)
-        col_sums.to_csv(f"{OUTPUT_DIR}/cluster_{name}_proportions.csv")
-
-        # Heatmap for deceased
-        dset_dead = dset[dset["hospital_expire_flag"] == 1]
-        if len(dset_dead) > 0:
-            colors = ["#440154", "#FDE725"]
-            g = sns.clustermap(
-                dset_dead[cols], annot=False, cbar=False, yticklabels=False,
-                cmap=colors, dendrogram_ratio=(0.3, 0.1), col_cluster=False,
-            )
-            g.ax_row_dendrogram.set_visible(False)
-            plt.setp(g.ax_heatmap.get_xticklabels(), fontsize=22)
-            g.savefig(f"{OUTPUT_DIR}/heatmap_cluster_{name}.pdf")
-            plt.close()
-
-        # SHAP
-        tok = build_shap_tokenizer(tokenizer)
-
-        def predict_fn(sample):
-            inputs = tok(
-                sample.astype(str).tolist(),
-                padding="max_length", max_length=45,
-                return_tensors="pt", return_offsets_mapping=False,
-            )
-            enc = inputs["input_ids"].to(device)
-            mask = inputs["attention_mask"].to(torch.bool) == False
-            mask = mask.to(device)
-            with torch.no_grad():
-                out = model(enc, attention_mask=mask)
-            return torch.argmax(out, dim=-1).cpu().numpy()
-
-        import shap
-        masker = shap.maskers.Text(tok, mask_token="[MASK]")
-        explainer = shap.Explainer(predict_fn, masker, algorithm="permutation")
-        texts_sample = dset["input"].head(30)
-        shap_vals = explainer(texts_sample)
-        values = shap_vals.abs.values
-
-        shape_data_list = []
-        for i in range(len(values)):
-            pro_tokens = texts_sample.iloc[i].split()[1:]
-            val_arr = values[i][1:]
-            min_len = min(len(pro_tokens), len(val_arr))
-            shape_dict = dict(zip(pro_tokens[:min_len], val_arr[:min_len]))
-            shape_dict = {k: v for k, v in shape_dict.items() if v != 0}
-            shape_data_list.append(shape_dict)
-
-        pd.DataFrame(shape_data_list).to_csv(f"{OUTPUT_DIR}/shap_lab_cluster_{name}.csv", index=False)
-        print(f"SHAP saved for cluster {name}")
-
-    # Lab label embedding analysis
-    if lab is not None:
-        print("\n--- Lab label embedding ---")
-        lab_labels = lab[["classification_label"]].copy()
-        lab_labels["input"] = "[CLS] " + lab_labels["classification_label"]
-
-        lab_preds, _, lab_embs = evaluate_model(
-            model, lab_labels, tokenizer, MAX_LENGTH, device, return_embedding=True
-        )
-        lab_labels["predictions"] = lab_preds
-
-        tsne_lab = TSNE(n_components=2, perplexity=40, random_state=70)
-        lab_coords = tsne_lab.fit_transform(lab_embs)
-
-        plt.figure(figsize=(8, 6))
-        plt.scatter(lab_coords[:, 0], lab_coords[:, 1], c=lab_preds, cmap="viridis")
-        plt.title("Lab Classification Label Embeddings")
-        plt.xlabel("PC1"); plt.ylabel("PC2")
-        plt.savefig(f"{OUTPUT_DIR}/lab_label_embedding.pdf")
-        plt.close()
-
-    # Palliative care check
-    if full_embs is not None:
-        print("\n--- Palliative care check ---")
-        data["has_palliative"] = data["input"].str.contains("Encounter_for_palliative_care", na=False)
-        tsne_pall = TSNE(n_components=2, perplexity=90, random_state=20)
-        pall_coords = tsne_pall.fit_transform(full_embs)
-        plt.figure(figsize=(8, 6))
-        plt.scatter(
-            pall_coords[:, 0], pall_coords[:, 1],
-            c=data["has_palliative"].astype(int), cmap="viridis",
-        )
-        plt.title("Palliative Care Patients in Embedding Space")
-        plt.savefig(f"{OUTPUT_DIR}/palliative_check_{prefix}.pdf")
-        plt.close()
-
-
 # ── Loss curve ─────────────────────────────────────────────────────
 
 def plot_loss_curve(train_loss, cfg):
@@ -395,8 +238,7 @@ def plot_loss_curve(train_loss, cfg):
 
 def main():
     args = parse_args()
-    mode = detect_mode(args)
-    cfg = DEFAULT_CONFIG[mode].copy()
+    cfg = DEFAULT_CONFIG["diag"].copy()
     cfg["encoder_num_default"] = 6
 
     if args.output_dir:
@@ -405,7 +247,6 @@ def main():
 
     print("=" * 60)
     print(f"Experiment: {cfg['title']}")
-    print(f"Mode: {mode}")
     print("=" * 60)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -450,15 +291,7 @@ def main():
         data_filtered, full_embs, cfg, args,
     )
 
-    # ── 7. Lab-specific analysis ──
-    if mode == "dig_lab" or args.enable_lab_analysis:
-        print("\n--- Lab Analysis ---")
-        run_lab_analysis(
-            model, fast_tokenizer, device,
-            data_filtered, clustered, lab, cfg, full_embs,
-        )
-
-    # ── 8. Loss curve ──
+    # ── 7. Loss curve ──
     plot_loss_curve(train_loss, cfg)
 
     print("\nDone. Outputs in:", OUTPUT_DIR)
