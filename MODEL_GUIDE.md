@@ -8,7 +8,8 @@ Pick by what data you have at hand:
 | family | input | models | where the weights live |
 |---|---|---|---|
 | **ICD text BERT** (`src/`) | discharge ICD diagnosis codes, tokenized text | 6L / 36L, CSL mode (2 checkpoints) | HuggingFace `fansen/BERT-6L-CSL-Sepsis-Diag`, `fansen/BERT-36L-CSL-Sepsis-Diag` |
-| **TSM trajectory BERT** (`tsm-bert/`) | pre-admission vitals/lab daily trajectory, 15 channels | w7 / w14 / w30 (3 checkpoints) | `tsm-bert/checkpoints/` in this repo (+ HF `fansen/BERT-TSM-Sepsis-Diag` once uploaded) |
+| **TSM trajectory BERT** (`tsm-bert/`) | pre-admission vitals/lab daily trajectory, 15 channels | w7 / w14 / w30 (3 checkpoints) | `tsm-bert/checkpoints/` in this repo |
+| **Cohort data** (both families) | 5-cohort ICD diagnosis CSVs (ICD family) + standardization/tokenized TSM npz (TSM family) | — | HuggingFace `fansen/sepsis-diag-datasets` |
 
 Both are BERT-style encoder Transformers; both output a single binary logit
 (sigmoid -> probability of death). They are NOT comparable runs: different
@@ -145,6 +146,8 @@ requirements.txt  ICD-family deps; tsm-bert/requirements.txt = TSM deps
 ## Data & licenses
 
 - Code + weights: MIT.
-- **No patient-level data** is distributed with this repository;
-  `scalars.json` holds aggregate statistics only. MIMIC-derived training
-  data remains subject to PhysioNet terms of use.
+- `scalars.json` in this repository holds aggregate statistics only.
+- Patient-level cohort artifacts (ICD diagnosis CSVs, TSM
+  `tsm_split_*.npz` / `bert_tokens_*.npz`) live in HuggingFace
+  `fansen/sepsis-diag-datasets`; MIMIC-derived data remains subject to
+  PhysioNet terms of use.
