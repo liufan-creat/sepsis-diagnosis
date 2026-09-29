@@ -44,18 +44,6 @@ ALL_MODELS = [
         "output_dir": "./hf_upload/BERT-36L-CSL-Sepsis-Diag",
         "model_name": "BERT-36L-CSL",
     },
-    {
-        "checkpoint": f"outputs/BERT-6L-Recon.pth",
-        "tokenizer_path": "outputs/sepsis_diagnoses_lab_tokenizer.json",
-        "output_dir": "./hf_upload/BERT-6L-Recon-Sepsis-Diag",
-        "model_name": "BERT-6L-Recon",
-    },
-    {
-        "checkpoint": f"outputs/BERT-36L-Recon.pth",
-        "tokenizer_path": "outputs/sepsis_diagnoses_lab_tokenizer.json",
-        "output_dir": "./hf_upload/BERT-36L-Recon-Sepsis-Diag",
-        "model_name": "BERT-36L-Recon",
-    },
 ]
 
 
@@ -152,11 +140,9 @@ def convert_single(model_cfg):
         }, f, indent=2)
 
     # 6. README.md (lite model card)
-    mode = "dig_lab" if "Recon" in model_name else "diag"
     with open(out_dir / "README.md", "w") as f:
         f.write(f"# {model_name}\n\n")
         f.write(f"Sepsis in-hospital mortality prediction from ICD diagnosis text.\n\n")
-        f.write(f"- **Mode**: {mode}\n")
         f.write(f"- **Architecture**: BERT-style Transformer (encoder_num={enc_num}, 6 layers per branch)\n")
         f.write(f"- **Total parameters**: {total_params:,}\n")
         f.write(f"- **Vocabulary size**: {vocab_size}\n")
@@ -187,7 +173,7 @@ def convert_single(model_cfg):
 
 def main():
     parser = argparse.ArgumentParser(description="Convert custom checkpoint → HF format")
-    parser.add_argument("--convert-all", "-a",  action="store_true",  help="Convert all 4 models in registry")
+    parser.add_argument("--convert-all", "-a",  action="store_true",  help="Convert all models in registry")
     parser.add_argument("-c", "--checkpoint",        default=None,    help="Single model .pth path")
     parser.add_argument("-t", "--tokenizer",         default=None,    help="Tokenizer .json path")
     parser.add_argument("-n", "--model-name",        default=None,    help="Model name (used in HF dir)")
@@ -196,7 +182,7 @@ def main():
 
     if not args.convert_all and not args.checkpoint:
         print("Usage:")
-        print("  convert_to_hf.py --convert-all              (all 4 models)")
+        print("  convert_to_hf.py --convert-all              (all models)")
         print("  convert_to_hf.py -c ckpt.pth -t tok.json -n NAME [-o dir]")
         return
 
