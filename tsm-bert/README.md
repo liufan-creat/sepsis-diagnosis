@@ -136,13 +136,15 @@ with torch.no_grad():
 # p = P(in-hospital death | w30 pre-admission trajectory)
 ```
 
-## What is deliberately NOT included
+## Released cohort data
 
-Patient-level data (tokens npz, split npz, labels, hadm ids) is NOT
-distributed with this repository: the released artifacts above reproduce
-the model on any conforming external cohort using only `scalars.json`
-(aggregate statistics, no patient info). MIMIC-derived training data
-remains subject to Physionet terms of use.
+The exact patient-level artifacts behind the reported results (5 cohorts:
+`tsm_split_*.npz` standardization + window matrices and `bert_tokens_*.npz`
+tokenized sequences with labels, ~467 MB total) are published at
+[huggingface.co/datasets/fansen/sepsis-diag-datasets](https://huggingface.co/datasets/fansen/sepsis-diag-datasets)
+(the cross-cohort ICD diagnosis CSVs for the `src/` family are in the same repo).
+
+MIMIC-derived cohort data remains subject to the Physionet terms of use.
 
 ## License
 
